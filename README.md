@@ -1,8 +1,10 @@
+![](./data/example-network.png)
+
 # ONNX in TouchDesigner
 
-ONNX (Open Neural Network Exchange) is a highly portable ML model format that is (relatively) easily used across different frameworks and platforms. There are some nice computer vision (cv) models that allow for various creative opportunities in TouchDesigner. This repository has examples for **DepthAnythingV2** and **Movenet**.
+ONNX (Open Neural Network Exchange) is a highly portable ML model format that is (relatively) easily used across different frameworks and platforms. There are lots of computer vision (cv) ONNX models that allow for various creative opportunities in TouchDesigner. This repository has examples for **DepthAnythingV2** and **Movenet**.
 
-In the journey to get these models working, I learned a lot about ONNX models, but even more about how external Python modules work in TouchDesigner. This README explains how to get the project running, but also serves as a reference to some less-documented ways that external Python tools can be used in TD.
+During my journey to get these models working, I learned a lot about ONNX models, but even more about how external Python modules work in TouchDesigner. This README explains how to get the project running, but also serves as a reference to some less-documented ways that external Python tools can be used in TD.
 
 ## Installation
 
