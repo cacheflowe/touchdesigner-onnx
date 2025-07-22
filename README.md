@@ -15,7 +15,7 @@ To install the required Python modules, use the shell scripts in the `python/scr
    - Windows: `install-modules.cmd` (or double-click the file)
    - Mac: `sudo install-modules.sh`
 4. Download the models as described below.
-5. Open `onnx-example.toe` in TouchDesigner.
+5. Open `onnx-example.toe` in TouchDesigner 2023.12370
 
 Notes:
 
