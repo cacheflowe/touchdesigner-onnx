@@ -22,19 +22,19 @@ Notes:
 - If you're on a Windows PC, it's expected that you have an NVIDIA GPU. Otherwise, you can switch to the CPU version of `onnxruntime` by editing the `requirements.txt` file to use `onnxruntime` instead of `onnxruntime-gpu`, and then re-running the install script. The CPU version is slower, but should work on non-NVIDIA GPUs.
 - If you need to reinstall the Python modules, you can delete the `python/_local_modules` directory and re-run the install script. This will ensure that the modules are installed fresh. You'll need to quit TouchDesigner before deleting & reinstalling.
 
-### Downloading the models
+### The ONNX models
 
 #### DepthAnythingV2
 
 This is a model that performs depth estimation from a single image, and is useful for creating 3D effects in TouchDesigner. It's like having a Kinect or Orbbec depth map, but from any image or RGB webcam input. The model included in this example it the "small" (vits) version, which runs faster (but has lower output quality) than the larger versions. A good rule of thumb is to use the smallest model that gives you the results you want, because larger models are generally slower and more resource-intensive.
 
-> This model is [downloaded](https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vits_dynamic.onnx) from the [GitHub repository](https://github.com/fabio-sim/Depth-Anything-ONNX/releases), and moved into `data/ml/models/depth-anything/`
+> This model was [downloaded](https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vits_dynamic.onnx) from the [GitHub repository](https://github.com/fabio-sim/Depth-Anything-ONNX/releases), and moved into `data/ml/models/depth-anything/`
 
 #### Movenet
 
 This is a model that performs human pose estimation, and is useful for tracking body movements in TouchDesigner. The model included in this example is the "multipose" version, which can track multiple (up to 6) people in the same frame. At the time of this writing, this model handles multiple skeletons far better than MediaPipe's pose estimation.
 
-> This model is [downloaded](https://huggingface.co/Xenova/movenet-multipose-lightning/resolve/main/onnx/model.onnx?download=true) from the [HuggingFace repository](https://huggingface.co/Xenova/movenet-multipose-lightning/tree/main/onnx), and renamed from `model.onnx` to `movenet_multipose_lightning.onnx` and moved into `data/ml/models/movenet/`
+> This model was [downloaded](https://huggingface.co/Xenova/movenet-multipose-lightning/resolve/main/onnx/model.onnx?download=true) from the [HuggingFace repository](https://huggingface.co/Xenova/movenet-multipose-lightning/tree/main/onnx), and renamed from `model.onnx` to `movenet_multipose_lightning.onnx` and moved into `data/ml/models/movenet/`
 
 ## Python Approach
 
@@ -44,7 +44,7 @@ General Python setup in this project:
 
 2) Since we're already relying on pip-installed modules, we'll import some of our own external Python code for common helper functions. These tools are located in `python/util` and make it easier to work with ONNX models in TouchDesigner. 
 
-3) Finally, the Script nodes' Python code has been externalized (located in `python/external`) so it's easier to update and reference on GitHub. There's a bit of duplicated code between the Movenet and DepthAnything scripts, but this allows them to work independently and load their models on a Python thread so TD doesn't lock up quite as much. 
+3) Finally, the Script nodes' Python code has been externalized (located in `python/external`) so it's easier to update and reference on GitHub. There's a bit of duplicated code between the **Movenet** and **DepthAnything** scripts, but this allows them to work independently and load their models on a Python thread so TD doesn't lock up quite as much. 
 
 ### Python modules installation 
 
