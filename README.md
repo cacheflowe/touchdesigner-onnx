@@ -8,7 +8,6 @@ During my journey to get these models working, I learned a lot about ONNX models
 
 ## Installation
 
-
 To install the required Python modules, use the shell scripts in the `python/scripts` directory. These scripts use TouchDesigner's built-in Python executable to install the necessary packages. Read more about how this works (and why it might not work) below.
 
 1. Open a terminal or command prompt.
@@ -16,14 +15,25 @@ To install the required Python modules, use the shell scripts in the `python/scr
 3. Run the appropriate script for your operating system:
    - Windows: `install-modules.cmd` (or double-click the file)
    - Mac: `sudo bash ./install-modules.sh`
-4. Download the models as described below.
-5. Open `onnx-example.toe` in TouchDesigner 2023.12370 
+4. If you're on Windows and have an NVIDIA GPU, follow the instructions below to install CUDA and cuDNN.
+5. Open `onnx-example.toe` in TouchDesigner 2023.12370
   - This has been tested back to 2023.11340, but may work in slightly earlier versions
 
-Notes:
+#### CUDA installation steps for Windows/NVIDIA:
+
+- ⚠️ I take no responsibility for your PC's existing CUDA installation!
+- Download and install `CUDA 11.8` with installer [here](https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe) - use the express install option
+- Download and install `cuDNN 8.9.7` (this part is a little unhinged)
+  - The official Windows install docs are [here](https://docs.nvidia.com/deeplearning/cudnn/archives/cudnn-897/install-guide/index.html#installwindows) for reference, but they're not great. Let's ignore them
+  - Download the `cuDNN 8.9.7` .zip file from the [NVIDIA Developer site](https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-8.9.7.29_cuda11-archive.zip)
+  - Copy and paste the 3 directories (`bin`, `include`, `lib`) right into the CUDA library location. This will simply add the cuDNN files to the existing CUDA installation. Now we're done!
+    - Default CUDA location `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8`
+
+#### More installation notes:
 
 - If you're on a Windows PC, it's expected that you have an NVIDIA GPU. Otherwise, you can switch to the CPU version of `onnxruntime` by editing the `requirements.txt` file to use `onnxruntime` instead of `onnxruntime-gpu`, and then re-running the install script. The CPU version is slower, but should work on non-NVIDIA GPUs.
 - If the installation fails, your TD installation may not be in the expected location. You can change this in the shell script.
+- If you get lots of errors in the Textport, your CUDA installation might not be set up in your system path properly, or cuDNN hasn't been installed.
 - If you need to reinstall the Python modules, you can delete the `python/_local_modules` directory and re-run the install script. This will ensure that the modules are installed fresh. You'll need to quit TouchDesigner before deleting & reinstalling.
 
 ### The ONNX models
@@ -64,7 +74,7 @@ This project works in TouchDesigner 2023.12370 and probably slightly earlier ver
 TD 2023.12370 was built with these relevant tooling versions:
 
 - `Python 3.11.1` (noted when the Textport opens)
-- `Cuda 11.8` (noted in the [TD docs](https://derivative.ca/UserGuide/CUDA))
+- `Cuda 11.8` (noted in the [TD docs](https://derivative.ca/UserGuide/CUDA), however this is for C++ node development, not Python)
 - `numpy 1.24.1` (check the version with `import numpy; print(numpy.__version__)` in the Textport)
 
 ### What is installed with the shell scripts
@@ -91,7 +101,7 @@ print(ort.get_available_providers())
 
 This will print a list of available providers, which should include `CUDAExecutionProvider` if the GPU is available and properly configured.
 
-- The shell script installs the Python ONNX Runtime, which allows us to load and run any ONNX model in TouchDesigner. Each ONNX model has its own format and challenges to understand how to use it, but I've provided a few examples to get you started. This version of TouchDesigner needs version 1.18, which *should* support GPU inference on Windows, because it's numpy & Cuda versions are compatible.
+- The shell script installs the Python ONNX Runtime, which allows us to load and run any ONNX model in TouchDesigner. Each ONNX model has its own format and challenges to understand how to use it, but I've provided a few examples to get you started. This version of TouchDesigner needs version 1.18, which *should* support GPU inference on Windows, because it's numpy & CUDA versions are compatible.
   - `onnxruntime-gpu` on Windows
   - `onnxruntime` on Mac 
 
