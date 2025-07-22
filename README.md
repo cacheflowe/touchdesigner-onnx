@@ -9,11 +9,11 @@ During my journey to get these models working, I learned a lot about ONNX models
 ## Installation
 
 
-To install the required Python modules, use the shell scripts in the `python/scripts` directory. These scripts will automatically use TouchDesigner's built-in Python executable to install the necessary packages. Read more about how this works (and why it might not work) below.
+To install the required Python modules, use the shell scripts in the `python/scripts` directory. These scripts use TouchDesigner's built-in Python executable to install the necessary packages. Read more about how this works (and why it might not work) below.
 
 1. Open a terminal or command prompt.
 2. `cd` to the `python/scripts` directory.
-2. Run the appropriate script for your operating system:
+3. Run the appropriate script for your operating system:
    - Windows: `install-modules.cmd` (or double-click the file)
    - Mac: `sudo bash ./install-modules.sh`
 4. Download the models as described below.
@@ -23,6 +23,7 @@ To install the required Python modules, use the shell scripts in the `python/scr
 Notes:
 
 - If you're on a Windows PC, it's expected that you have an NVIDIA GPU. Otherwise, you can switch to the CPU version of `onnxruntime` by editing the `requirements.txt` file to use `onnxruntime` instead of `onnxruntime-gpu`, and then re-running the install script. The CPU version is slower, but should work on non-NVIDIA GPUs.
+- If the installation fails, your TD installation may not be in the expected location. You can change this in the shell script.
 - If you need to reinstall the Python modules, you can delete the `python/_local_modules` directory and re-run the install script. This will ensure that the modules are installed fresh. You'll need to quit TouchDesigner before deleting & reinstalling.
 
 ### The ONNX models
