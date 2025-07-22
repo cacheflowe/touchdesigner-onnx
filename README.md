@@ -248,6 +248,7 @@ def process_frame(frame):
   - https://pypi.org/project/onnxruntime/
     - Version 1.18 is GPU compatible!
 - Examples of ML tools and Python module management in TD
+  - https://derivative.ca/community-post/tutorial/anaconda-miniconda-managing-python-environments-and-3rd-party-libraries
   - https://derivative.ca/community-post/real-time-magic-integrating-touchdesigner-and-onnx-models/69856
   - https://github.com/olegchomp/TDDepthAnything - A different method of running DepthAnything in TD
   - https://github.com/DBraun/PyTorchTOP
@@ -255,10 +256,14 @@ def process_frame(frame):
   👈 Check the comments
   - https://github.com/IntentDev/TopArray/
   - https://github.com/ioannismihailidis/venvBuilderTD/
-  - https://derivative.ca/community-post/tutorial/anaconda-miniconda-managing-python-environments-and-3rd-party-libraries
 - Find more ONNX models: 
 	- https://aihub.qualcomm.com/models
   - https://huggingface.co/qualcomm
   - https://huggingface.co/onnx-community/models
   - https://huggingface.co/onnxmodelzoo
   - https://docs.ultralytics.com/integrations/onnx/
+- More documentation about using Python in TD
+  - https://derivative.ca/UserGuide/Category:Python
+  - https://derivative.ca/community-post/tutorial/external-python-libraries/61022
+  - [How to use external python libraries in Touchdesigner](https://www.youtube.com/watch?v=_U5gcTEsupE)
+  - [TouchDesigner | External Python Libraries | 7/8](https://www.youtube.com/watch?v=LFWcsx2Ic6g)
