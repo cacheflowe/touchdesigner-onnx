@@ -1,0 +1,6 @@
+*Thumbs.db
+.DS_Store
+Backup/
+python/_local_modules
+onnex-example.*.toe
+__pycache__/
