@@ -21,12 +21,11 @@ To install the required Python modules, use the shell scripts in the `python/scr
 
 #### CUDA installation steps for Windows/NVIDIA:
 
-- ⚠️ I take no responsibility for your PC's existing CUDA installation!
 - Download and install `CUDA 11.8` with installer [here](https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_522.06_windows.exe) - use the express install option
 - Download and install `cuDNN 8.9.7` (this part is a little unhinged)
   - The official Windows install docs are [here](https://docs.nvidia.com/deeplearning/cudnn/archives/cudnn-897/install-guide/index.html#installwindows) for reference, but they're not great. Let's ignore them
   - Download the `cuDNN 8.9.7` .zip file from the [NVIDIA Developer site](https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-8.9.7.29_cuda11-archive.zip)
-  - Copy and paste the 3 directories (`bin`, `include`, `lib`) right into the CUDA library location. This will simply add the cuDNN files to the existing CUDA installation. Now we're done!
+  - Copy and paste the 3 directories (`bin`, `include`, `lib`) right into your CUDA library location (which also has these directories). This will simply add the cuDNN files to the existing CUDA installation. Now we're done!
     - Default CUDA location `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8`
 
 #### More installation notes:
@@ -42,11 +41,15 @@ To install the required Python modules, use the shell scripts in the `python/scr
 
 This is a model that performs depth estimation from a single image, and is useful for creating 3D effects in TouchDesigner. It's like having a Kinect or Orbbec depth map, but from any image or RGB webcam input. The model included in this example it the "small" (vits) version, which runs faster (but has lower output quality) than the larger versions. A good rule of thumb is to use the smallest model that gives you the results you want, because larger models are generally slower and more resource-intensive.
 
+DepthAnythingV2 *greatly* benefits from running on an NVIDIA GPU with cuDNN installed. It can run on a CPU, but performance won't be good for real-time applications.
+
 > This model was [downloaded](https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vits_dynamic.onnx) from the [GitHub repository](https://github.com/fabio-sim/Depth-Anything-ONNX/releases), and moved into `data/ml/models/depth-anything/`
 
 #### Movenet
 
 This is a model that performs human pose estimation, and is useful for tracking body movements in TouchDesigner. The model included in this example is the "multipose" version, which can track multiple (up to 6) people in the same frame. At the time of this writing, this model handles multiple skeletons far better than MediaPipe's pose estimation.
+
+Movenet is an extremely fast model, and can run in real-time even on a CPU. It's still much faster on an NVIDIA GPU though.
 
 > This model was [downloaded](https://huggingface.co/Xenova/movenet-multipose-lightning/resolve/main/onnx/model.onnx?download=true) from the [HuggingFace repository](https://huggingface.co/Xenova/movenet-multipose-lightning/tree/main/onnx), and renamed from `model.onnx` to `movenet_multipose_lightning.onnx` and moved into `data/ml/models/movenet/`
 
