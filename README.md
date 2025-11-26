@@ -13,7 +13,7 @@ To install the required Python modules, use the shell scripts in the `python/scr
 1. Open a terminal or command prompt.
 2. `cd` to the `python/scripts` directory.
 3. Run the appropriate script for your operating system:
-   - Windows: `install-modules.cmd` (or double-click the file)
+   - Windows: `.\install-modules.cmd` (or double-click the file)
    - Mac: `sudo bash ./install-modules.sh`
 4. If you're on Windows and have an NVIDIA GPU, follow the instructions below to install CUDA and cuDNN.
 5. Open `onnx-example.toe` in TouchDesigner 2023.12370
@@ -27,12 +27,18 @@ To install the required Python modules, use the shell scripts in the `python/scr
   - Download the `cuDNN 8.9.7` .zip file from the [NVIDIA Developer site](https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-8.9.7.29_cuda11-archive.zip)
   - Copy and paste the 3 directories (`bin`, `include`, `lib`) right into your CUDA library location (which also has these directories). This will simply add the cuDNN files to the existing CUDA installation. Now we're done!
     - Default CUDA location `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.8`
+- > After installing CUDA, your system will have a `CUDA_HOME` environment variable set, which could potentially overwrite the default location of a previous CUDA installation. This is fine, but if you have multiple CUDA versions installed, you might need to adjust this variable to point to the correct version for other programs to run properly.
 
 #### More installation notes:
 
 - If you're on a Windows PC, it's expected that you have an NVIDIA GPU. Otherwise, you can switch to the CPU version of `onnxruntime` by editing the `requirements.txt` file to use `onnxruntime` instead of `onnxruntime-gpu`, and then re-running the install script. The CPU version is slower, but should work on non-NVIDIA GPUs.
 - If the installation fails, your TD installation may not be in the expected location. You can change this in the shell script.
 - If you get lots of errors in the Textport, your CUDA installation might not be set up in your system path properly, or cuDNN hasn't been installed.
+  - Specifically, errors like this show up if you have CUDA but not cuDNN: 
+    ```
+    *************** EP Error ***************
+    EP Error D:\a_work\1\s\onnxruntime\python\onnxruntime_pybind_state.cc:857 onnxruntime::python::CreateExecutionProviderInstance CUDA_PATH is set but CUDA wasnt able to be loaded. 
+    ```
 - If you need to reinstall the Python modules, you can delete the `python/_local_modules` directory and re-run the install script. This will ensure that the modules are installed fresh. You'll need to quit TouchDesigner before deleting & reinstalling.
 
 ### The ONNX models
@@ -41,7 +47,7 @@ To install the required Python modules, use the shell scripts in the `python/scr
 
 This is a model that performs depth estimation from a single image, and is useful for creating 3D effects in TouchDesigner. It's like having a Kinect or Orbbec depth map, but from any image or RGB webcam input. The model included in this example it the "small" (vits) version, which runs faster (but has lower output quality) than the larger versions. A good rule of thumb is to use the smallest model that gives you the results you want, because larger models are generally slower and more resource-intensive.
 
-DepthAnythingV2 *greatly* benefits from running on an NVIDIA GPU with cuDNN installed. It can run on a CPU, but performance won't be good for real-time applications.
+DepthAnythingV2 *greatly* benefits from running on an NVIDIA GPU with cuDNN installed. While it *can* run on a CPU, performance likely won't be good for real-time applications.
 
 > This model was [downloaded](https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vits_dynamic.onnx) from the [GitHub repository](https://github.com/fabio-sim/Depth-Anything-ONNX/releases), and moved into `data/ml/models/depth-anything/`
 

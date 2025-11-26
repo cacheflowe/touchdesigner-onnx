@@ -1,0 +1,2 @@
+numpy==2.1.2
+onnxruntime-gpu[cuda,cudnn]==1.22.0

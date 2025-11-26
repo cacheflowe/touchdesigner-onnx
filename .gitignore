@@ -2,5 +2,6 @@
 .DS_Store
 Backup/
 python/_local_modules
-onnex-example.*.toe
+touchdesigner-onnx_vEnv
+onnx-example.*.toe
 __pycache__/
