@@ -1,7 +1,9 @@
 *Thumbs.db
 .DS_Store
 Backup/
+output/
 python/_local_modules
 touchdesigner-onnx_vEnv
 onnx-example.*.toe
+td-onnx.*.toe
 __pycache__/
