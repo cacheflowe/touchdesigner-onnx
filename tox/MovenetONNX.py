@@ -5,36 +5,12 @@ import time
 import threading
 import numpy as np
 import onnxruntime as ort
-import importlib
-import cv2
 from TDStoreTools import StorageManager
 import TDFunctions as TDF
 
-# make external python utils available
-print("🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍")
-
-def addPath(new_path):
-	if new_path not in sys.path:
-		if os.path.exists(new_path):
-			# Add to the beginning of the path list
-			sys.path.insert(0, new_path)
-
-utils_path = os.path.join(project.folder, 'python', 'util')
-addPath(utils_path)
-
-print('🐍 Python locations in sys.path:')
-for path in sys.path:
-	print("🐍 -", path)
-print("🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍")
-
-
-# import other dependencies now that the path supports it
-import numpy_util as npu  # our custom numpy utility module
-import onnx_util  # our custom onnx utility module
-
-# reload our custom modules on save in case they've changed
-importlib.reload(onnx_util)
-importlib.reload(npu)
+# custom util imports
+onnx_util = mod(f'{op.PyUtils}/onnx_util')
+npu = mod(f'{op.PyUtils}/numpy_util')
 
 
 #####################################################
@@ -44,8 +20,6 @@ importlib.reload(npu)
 #####################################################
 #####################################################
 #####################################################
-
-
 
 class Skeleton:
 	"""
@@ -190,9 +164,9 @@ class Skeleton:
 		"""Lerp this skeleton's data toward another skeleton's data for smoothing."""
 		inv_amt = 1.0 - amt
 		# Vectorized lerp operations
-		self.kp_x[:] = inv_amt * self.kp_x + amt * skel2.kp_x
-		self.kp_y[:] = inv_amt * self.kp_y + amt * skel2.kp_y
-		self.bbox[:] = inv_amt * self.bbox + amt * skel2.bbox
+		self.kp_x[:] = amt * self.kp_x + inv_amt * skel2.kp_x
+		self.kp_y[:] = amt * self.kp_y + inv_amt * skel2.kp_y
+		self.bbox[:] = amt * self.bbox + inv_amt * skel2.bbox
 
 	def start(self):
 		"""Initialize a new skeleton with unique ID and birth time."""
@@ -361,7 +335,7 @@ class MovenetONNX:
 
 	def DebugW(self):
 		return self.opRawInputTOP.width * self.ownerComp.par.Drawdebugscale.eval()
-		
+
 	def DebugH(self):
 		return self.opRawInputTOP.height * self.ownerComp.par.Drawdebugscale.eval()
 

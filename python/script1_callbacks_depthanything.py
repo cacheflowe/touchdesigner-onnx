@@ -1,36 +1,15 @@
 ﻿import os
 import sys
 
-# Make sure our paths are set up before using external modules
-print("🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍")
-
-def addPath(new_path):
-	if new_path not in sys.path:
-		if os.path.exists(new_path):
-			sys.path.insert(0, new_path)  # Add to the beginning of the path list
-
-utils_path = os.path.join(project.folder, 'python', 'util')
-addPath(utils_path)
-
-
-# print all paths
-print('🐍 Python locations in sys.path:')
-for path in sys.path:
-	print("🐍 -", path)
-print("🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍🐍")
-
 # import other dependencies now that the path supports it
 import threading
 import numpy as np
 import onnxruntime as ort
-import numpy_util as npu  # our custom numpy utility module
-import onnx_util  # our custom onnx utility module
-import importlib
 import cv2
 
-# reload our custom modules on save in case they've changed
-importlib.reload(onnx_util)
-importlib.reload(npu)
+# custom util imports
+onnx_util = mod(f'{op.PyUtils}/onnx_util')
+npu = mod(f'{op.PyUtils}/numpy_util')
 
 # Threaded model-loading helpers -------------------------------
 
@@ -206,7 +185,7 @@ def _inference_thread():
 			pending_result = output_img
 			
 	except Exception as e:
-		printONNX(f"Inference error: {e}")
+		print(f"Inference error: {e}")
 	finally:
 		is_inferencing = False
 		frames_skipped_final = frames_skipped
