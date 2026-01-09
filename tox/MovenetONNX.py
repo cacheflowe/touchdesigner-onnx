@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import time
 
@@ -115,8 +115,7 @@ class Skeleton:
 	LINE_THICKNESS = 1            # Line thickness
 	
 	# Pre-compute keypoint indices for distance calculation (exclude extremities)
-	DISTANCE_KEYPOINT_INDICES = [i for i, name in enumerate(KEYPOINT_NAMES) 
-		if not name.startswith('elbow') and not name.startswith('wrist') and not name.startswith('ankle')]
+	DISTANCE_KEYPOINT_INDICES = [i for i, name in enumerate(KEYPOINT_NAMES) if not name.startswith('elbow') and not name.startswith('wrist') and not name.startswith('ankle') and not name.startswith('knee')]
 	
 	@classmethod
 	def nextSkeletonId(cls):
@@ -324,11 +323,11 @@ class MovenetONNX:
 		self.initSkeletonTracking()
 
 		# set defaults
-		# self.ownerComp.par.Drawdebug = False
 		self.loggedInputShape = False
 		self.ToggleDebug(self.ownerComp.par.Drawdebug.eval())
-		# self.ToggleInputSquare(self.ownerComp.par.Inputsquare.eval())
-		self.setError("None")
+		self.ToggleDebug(self.ownerComp.par.Drawskeletononly.eval())
+		self.queuedStatus = "None"
+		self.queuedError = "None"
 		
 		# Performance timing variables
 		self.time_read_top = 0.0
@@ -340,20 +339,36 @@ class MovenetONNX:
 
 	def getOps(self):
 		# grab references to nodes
+		self.opRawInputTOP: nullTOP = self.ownerComp.op('in1')
 		self.opInputTOP: nullTOP = self.ownerComp.op('null_input')
+		self.opConstantInputConfigCHOP: constantCHOP = self.ownerComp.op('constant_input_config')
 		self.opScriptCHOP: scriptCHOP = self.ownerComp.op('script_movenet_chop')
 		self.opOutputCHOP: scriptCHOP = self.ownerComp.op('constant1')
 		self.opScriptTOP: scriptTOP = self.ownerComp.op('script_movenet_top')
 		self.opInfoCHOP: infoCHOP = self.ownerComp.op('info_scripts')
 		self.opSwitchInputTOP: switchTOP = self.ownerComp.op('switch_input_or_cv_debug')
 		self.opPerformanceChop: constantCHOP = self.ownerComp.op('constant_performance')
-		self.opSkeletonVisualizer: baseCOMP = self.ownerComp.op('SkeletonVisualizer2D')
+		self.opSkeletonVisualizers: list[baseCOMP] = self.ownerComp.ops('Skeleton*')
+
+	def InputW(self):
+		# quantize to multiple of 32 for model compatibility
+		return 32 * round(self.ownerComp.par.Inputwidth.eval() / 32)
+
+	def InputH(self):
+		# maintain aspect ratio based on input TOP
+		# and quantize to multiple of 32 for model compatibility
+		return 32 * round(self.ownerComp.par.Inputwidth.eval() * self.opRawInputTOP.height / self.opRawInputTOP.width / 32)
+
+	def DebugW(self):
+		return self.opRawInputTOP.width * self.ownerComp.par.Drawdebugscale.eval()
+		
+	def DebugH(self):
+		return self.opRawInputTOP.height * self.ownerComp.par.Drawdebugscale.eval()
 
 	def initONNX(self):
 		self.session = None  
 		self.loading_thread = None
 		self.is_loading = False
-		self.load_error = None
 		self.keypoints = None
 		
 		# Threaded inference state
@@ -385,22 +400,16 @@ class MovenetONNX:
 		print("[MoveNet]", *args)
 
 	def loadModel(self):
-		if self.is_loading:
-			self.printONNX("Model is already loading...")
-			return
+		# if self.is_loading:
+		# 	self.printONNX("Model is already loading...")
+		# 	return
 
 		# Reset session and start loading thread
 		self.session = None
-		self.setStatus("loading")
-		self.loading_thread = threading.Thread(target=self.loadModelThread)
+		self.queuedStatus = "Loading model..."
+		self.loading_thread = threading.Thread(target=self._loadModelThread)
 		self.loading_thread.daemon = True
-		self.loading_thread.start()
-
-	def setStatus(self, status):
-		self.ownerComp.par.Modelloaded = status
-
-	def setError(self, errMsg):
-		self.ownerComp.par.Errormessage = errMsg
+		self.loading_thread.start()		
 
 	def setNodeGood(self):
 		self.ownerComp.color = (0, 1, 0)
@@ -411,17 +420,24 @@ class MovenetONNX:
 	def ToggleDebug(self, enable: bool):
 		if enable == True:
 			self.ownerComp.par.opviewer = './out_skeleton_debug'
-			self.opSkeletonVisualizer.allowCooking = True
+			for viz in self.opSkeletonVisualizers:
+				viz.allowCooking = True
 		else:
 			self.ownerComp.par.opviewer = './out_skeletons'
-			self.opSkeletonVisualizer.allowCooking = False
+			for viz in self.opSkeletonVisualizers:
+				viz.allowCooking = False
 
-	# def ToggleInputSquare(self, is_square: bool):
-	# 	if is_square:
-	# 		# handle square
+	def ToggleDrawSkeletonOnly(self, skeleton_only: bool):
+		print(skeleton_only)
+		if skeleton_only:
+			for viz in self.opSkeletonVisualizers:
+				viz.op('text_info').bypass = True
+				viz.op('rectangle_bbox').bypass = True
+		else:
+			for viz in self.opSkeletonVisualizers:
+				viz.op('text_info').bypass = False
+				viz.op('rectangle_bbox').bypass = False
 
-	# 	else:
-	# 		# handle adaptive mode
 
 	# =================================================
 	# Model loading and processing 
@@ -432,14 +448,9 @@ class MovenetONNX:
 			if not self.is_loading:
 				self.loadModel()
 
-	def checkModelLoadError(self):
-		if self.load_error:
-			self.printONNX(f"Cannot process: {self.load_error}")
-			return
-
-	def loadModelThread(self):
+	def _loadModelThread(self):
 		self.is_loading = True
-		self.load_error = None
+		self.queuedStatus = "Loading..."
 
 		try:
 			start_time = time.perf_counter()
@@ -462,26 +473,14 @@ class MovenetONNX:
 			self.time_model_load = time.perf_counter() - start_time
 			self.printONNX(f"ONNX model loaded successfully in {self.time_model_load * 1000:.2f} ms!")
 			self.printONNX('=============================================')
-			# self.setNodeGood()
+			self.queuedStatus = "Loaded"
+			self.queuedError = None
 
 		except Exception as e:
-			self.load_error = str(e)
-			errorMsg = f"Error loading ONNX model: {self.load_error}"
-			self.printONNX(errorMsg)
-			self.setError(errorMsg)
-			# self.setNodeError()
+			self.queuedError = f"Error loading ONNX model: {str(e)}"
 		finally:
 			self.is_loading = False
 
-	def updateLoadingStatus(self):
-		status = "Not Loaded"
-		if self.session is not None:
-			status = "Loaded"
-		elif self.is_loading:
-			status = "Loading..."
-		elif self.load_error:
-			status = f"Error: {self.load_error}"
-		self.setStatus(status)
 
 	# =================================================
 	# CHOP output helpers
@@ -542,12 +541,28 @@ class MovenetONNX:
 
 	def Update(self):
 		self.lazyLoadModel()
-		self.updateLoadingStatus()
 		if self.session is not None:
 			self.runInferenceThreaded()
 			self.trackSkeletons()
 		self.reportPerformanceStats()
+		self.updateStatus()
 		return
+
+	def updateStatus(self):
+		if self.queuedError:
+			if self.queuedError != None:
+				self.printONNX(self.queuedError)
+				self.ownerComp.par.Errormessage = self.queuedError
+				self.setNodeError()
+		elif self.ownerComp.par.Errormessage != "None":
+			self.ownerComp.par.Errormessage = "None"
+		self.queuedError = None
+
+		if self.queuedStatus:
+			if self.queuedStatus != None:
+				self.ownerComp.par.Modelloaded = self.queuedStatus
+				self.setNodeGood()
+			self.queuedStatus = None
 
 	# =================================================
 	# Skeleton temporal tracking
@@ -601,6 +616,7 @@ class MovenetONNX:
 		matchedSkels = []
 		unmatchedPrevSkels = []
 		maxMatchDist = self.ownerComp.par.Maxmatchdist.eval()
+		# TODO: use minAge and lostFramesThreshold params for better noisy skeleton handling
 		minAge = self.ownerComp.par.Minimumage.eval()
 		lostFramesThreshold = self.ownerComp.par.Lostframesthreshold.eval()
 
@@ -771,7 +787,7 @@ class MovenetONNX:
 				self.loggedInputShape = True
 			
 		except Exception as e:
-			self.printONNX(f"Error capturing input: {e}")
+			self.queuedError = f"Error capturing input: {e}"
 			return
 
 		# Start inference in background thread
@@ -792,9 +808,12 @@ class MovenetONNX:
 			# Store results thread-safely
 			with self.inference_lock:
 				self.pending_keypoints = result
+
+			# should be good to reset error now
+			self.queuedError = None
 				
 		except Exception as e:
-			self.printONNX(f"Inference error: {e}")
+			self.queuedError = f"Inference error: {e}"
 		finally:
 			self.is_inferencing = False
 
