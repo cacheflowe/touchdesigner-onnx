@@ -27,10 +27,7 @@ class BackgroundRemovalInference(ONNXInferenceManager):
 			nA = cv2.resize(nA, (384, 384), interpolation=cv2.INTER_CUBIC)
 		
 		# PyTorch standardization: (x / 255 - mean) / std
-		nA = nA.astype(np.float32)
-		mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-		std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-		nA = (nA / 255.0 - mean) / std
+		nA = self.npu.imagenet_normalize(nA)
 		
 		# Transpose to CHW format and add batch dimension
 		input_tensor = nA.transpose(2, 0, 1)

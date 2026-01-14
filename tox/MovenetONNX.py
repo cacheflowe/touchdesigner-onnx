@@ -188,7 +188,7 @@ class Skeleton:
 		self.user_id = Skeleton.nextSkeletonId()
 		return self.user_id
 
-	def setFromKeypoints(self, person_data, minConfidence=0.1, minScale=0.1):
+	def setFromKeypoints(self, person_data, minConfidence=0.1, minScale=0.1, maxScale=1.0):
 		"""
 		Populate skeleton data from MoveNet keypoints array.
 		person_data: 56-element array for one person from MoveNet output
@@ -200,10 +200,12 @@ class Skeleton:
 		bbox_xmax = person_data[54]
 		bbox_width = bbox_xmax - bbox_xmin
 		bbox_height = bbox_ymax - bbox_ymin
+		bbox_area = bbox_width * bbox_height
 		person_score = person_data[55]
 
-		# Check for bad data
-		if person_score < minConfidence or bbox_height < minScale:
+		# Check for bad data - filter by confidence and bounding box area
+		# Area filtering helps reject both small skeletons and people too close to camera
+		if person_score < minConfidence or bbox_area < minScale or bbox_area > maxScale:
 			self.resetData()
 			return
 
@@ -594,6 +596,7 @@ class MovenetONNX:
 		start_time = time.perf_counter()
 		minConfidence = self.ownerComp.par.Minconfidence.eval()
 		minScale = self.ownerComp.par.Minscale.eval()
+		maxScale = self.ownerComp.par.Maxscale.eval()
 		lerpAmp = self.ownerComp.par.Lerpamp.eval()
 		
 		num_people = self.keypoints.shape[1]
@@ -601,7 +604,7 @@ class MovenetONNX:
 		# Populate skeletons New from current keypoints
 		for i in range(MovenetONNX.NUM_POSES):
 			if i < num_people:
-				self.skeletonsNew[i].setFromKeypoints(self.keypoints[0, i], minConfidence, minScale)
+				self.skeletonsNew[i].setFromKeypoints(self.keypoints[0, i], minConfidence, minScale, maxScale)
 			else:
 				self.skeletonsNew[i].resetData()
 

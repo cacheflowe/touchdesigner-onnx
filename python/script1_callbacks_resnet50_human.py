@@ -22,10 +22,7 @@ class ResNet50HumanInference(ONNXInferenceManager):
 		nA = self.npu.denormalize_td_image(nA)
 		
 		# PyTorch standardization: (x / 255 - mean) / std
-		nA = nA.astype(np.float32)
-		mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-		std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-		nA = (nA / 255.0 - mean) / std
+		nA = self.npu.imagenet_normalize(nA)
 		
 		# This model expects [batch, height, width, channels] format (TensorFlow-style)
 		# Just add batch dimension, keep HWC format

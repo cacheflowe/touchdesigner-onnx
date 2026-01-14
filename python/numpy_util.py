@@ -49,3 +49,11 @@ def convert_to_int32(nA):
 
 def add_batch_dimension(nA):
     return numpy.expand_dims(nA, axis=0)
+
+def imagenet_normalize(nA):
+    """Apply ImageNet normalization: (x / 255 - mean) / std.
+    Assumes input is 0-255 range uint8 or float32."""
+    nA = nA.astype(numpy.float32)
+    mean = numpy.array([0.485, 0.456, 0.406], dtype=numpy.float32)
+    std = numpy.array([0.229, 0.224, 0.225], dtype=numpy.float32)
+    return (nA / 255.0 - mean) / std

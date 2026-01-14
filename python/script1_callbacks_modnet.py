@@ -22,11 +22,8 @@ class ModNetInference(ONNXInferenceManager):
 		# TouchDesigner textures are already 0-1 float, so denormalize to 0-255
 		nA = self.npu.denormalize_td_image(nA)
 		
-		# ImageNet normalization: (x / 255 - mean) / std
-		nA = nA.astype(np.float32)
-		mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-		std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-		nA = (nA / 255.0 - mean) / std
+		# MODNet normalization: (x - 127.5) / 127.5 -> scales to -1 to 1
+		nA = (nA.astype('float32') - 127.5) / 127.5
 		
 		# Transpose to CHW format and add batch dimension
 		input_tensor = nA.transpose(2, 0, 1)

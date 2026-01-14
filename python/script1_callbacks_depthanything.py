@@ -42,9 +42,7 @@ class DepthAnythingInference(ONNXInferenceManager):
 				nA = cv2.resize(nA, (384, 384), interpolation=cv2.INTER_CUBIC)
 		elif newModel == True:
 			# ImageNet normalization
-			mean = np.array([0.485, 0.456, 0.406])
-			std = np.array([0.229, 0.224, 0.225])
-			nA = (nA - mean) / std
+			nA = self.npu.imagenet_normalize(nA)
 
 		# Prepare input tensor
 		input_tensor = self.npu.add_batch_dimension(nA)
