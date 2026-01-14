@@ -29,6 +29,14 @@ class Skeleton:
 	Temporal skeleton-tracking strategy ported from:
 	https://github.com/cacheflowe/haxademic.js/blob/master/demo/demo-webcam-ml5-bodypose.js
 	
+	TODO:
+	- How to ensure python libs with pyEnvManager are ready before component runs?
+	- [WIP, needs fixing] Catch errors and display in new COMP status field and maybe set the COMP color to red
+	- Don't register skeleton until age is > N frames to avoid false positives
+	- Nice-to-haves:
+		- Improve lost skeleton tracking and re-matching. Anything else we can do here?
+		- Model path config in COMP parameters?
+		- If only looking at torso, can we discard squished body parts?
 	"""
 
 	# Class variable for unique skeleton IDs
@@ -53,6 +61,8 @@ class Skeleton:
 		"knee_r",
 		"ankle_l",
 		"ankle_r",
+		"hand_l",  # Computed: extends from wrist
+		"hand_r",  # Computed: extends from wrist
 	]
 	
 	# Bounding box property names
@@ -100,9 +110,9 @@ class Skeleton:
 	def __init__(self, chopIndex):
 		self.index = chopIndex  # 1-based index for CHOP channel names
 		
-		# Pre-allocate numpy arrays for keypoints (17 keypoints x 2 coords)
-		self.kp_x = np.zeros(17, dtype=np.float64)
-		self.kp_y = np.zeros(17, dtype=np.float64)
+		# Pre-allocate numpy arrays for keypoints (19 keypoints x 2 coords: 17 from model + 2 computed hands)
+		self.kp_x = np.zeros(19, dtype=np.float64)
+		self.kp_y = np.zeros(19, dtype=np.float64)
 		
 		# Pre-allocate array for bounding box (10 values)
 		self.bbox = np.zeros(10, dtype=np.float64)
@@ -116,8 +126,11 @@ class Skeleton:
 		self.lost_frames = 0
 		
 		# Pre-cache channel names (built once, reused every frame)
-		self._chan_names_kp_x = [f"p{chopIndex}/{name}:tx" for name in Skeleton.KEYPOINT_NAMES]
-		self._chan_names_kp_y = [f"p{chopIndex}/{name}:ty" for name in Skeleton.KEYPOINT_NAMES]
+		# Store as interleaved pairs: [nose:tx, nose:ty, eye_l:tx, eye_l:ty, ...]
+		self._chan_names_keypoints = []
+		for name in Skeleton.KEYPOINT_NAMES:
+			self._chan_names_keypoints.append(f"p{chopIndex}/{name}:tx")
+			self._chan_names_keypoints.append(f"p{chopIndex}/{name}:ty")
 		self._chan_names_bbox = [f"p{chopIndex}/{prop}" for prop in Skeleton.BBOX_PROPS]
 		self._chan_name_user_id = f"p{chopIndex}/user_id"
 		self._chan_name_birth = f"p{chopIndex}/birth"
@@ -211,6 +224,23 @@ class Skeleton:
 		for kp_idx in range(17):
 			self.kp_x[kp_idx] = person_data[kp_idx * 3 + 1]
 			self.kp_y[kp_idx] = 1.0 - person_data[kp_idx * 3]  # Flip Y for TD coordinates
+		
+		# Compute hand positions (extend past wrist based on elbow->wrist direction)
+		# hand_l (index 17): elbow_l=7, wrist_l=9
+		# hand_r (index 18): elbow_r=8, wrist_r=10
+		extension_factor = 0.45  # Extend hand 40% of forearm length past wrist
+		
+		# Left hand
+		dx_l = self.kp_x[9] - self.kp_x[7]  # wrist_l - elbow_l
+		dy_l = self.kp_y[9] - self.kp_y[7]
+		self.kp_x[17] = self.kp_x[9] + dx_l * extension_factor
+		self.kp_y[17] = self.kp_y[9] + dy_l * extension_factor
+		
+		# Right hand
+		dx_r = self.kp_x[10] - self.kp_x[8]  # wrist_r - elbow_r
+		dy_r = self.kp_y[10] - self.kp_y[8]
+		self.kp_x[18] = self.kp_x[10] + dx_r * extension_factor
+		self.kp_y[18] = self.kp_y[10] + dy_r * extension_factor
 
 	def keypointsDistance(self, skel2):
 		"""
@@ -226,9 +256,8 @@ class Skeleton:
 
 	def createChopChannels(self, outputOp):
 		"""Create CHOP channels for this skeleton (called once)."""
-		for name in self._chan_names_kp_x:
-			outputOp.appendChan(name)
-		for name in self._chan_names_kp_y:
+		# Channels are already interleaved in _chan_names_keypoints
+		for name in self._chan_names_keypoints:
 			outputOp.appendChan(name)
 		for name in self._chan_names_bbox:
 			outputOp.appendChan(name)
@@ -239,10 +268,10 @@ class Skeleton:
 
 	def updateChopValues(self, outputOp):
 		"""Update CHOP channel values (called every frame). Uses cached channel names."""
-		# Update keypoints
-		for i in range(17):
-			outputOp[self._chan_names_kp_x[i]][0] = self.kp_x[i]
-			outputOp[self._chan_names_kp_y[i]][0] = self.kp_y[i]
+		# Update keypoints (interleaved: x, y, x, y, ...)
+		for i in range(19):
+			outputOp[self._chan_names_keypoints[i * 2]][0] = self.kp_x[i]      # tx
+			outputOp[self._chan_names_keypoints[i * 2 + 1]][0] = self.kp_y[i]  # ty
 		
 		# Update bounding box
 		for i in range(10):

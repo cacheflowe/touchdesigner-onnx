@@ -20,6 +20,11 @@ def rgba_to_rgb(nA):
 def convert_bgr_to_rgb(nA):
     return cv2.cvtColor(nA, cv2.COLOR_BGR2RGB)
 
+def normalize_td_image(nA):
+	if nA.max() > 1.0:
+		return (nA / 255).astype(numpy.float32)
+	return nA
+
 def denormalize_td_image(nA):
     if nA.max() <= 1.0:
         return (nA * 255).astype(numpy.uint8)
