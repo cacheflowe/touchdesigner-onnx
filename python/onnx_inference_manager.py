@@ -280,7 +280,8 @@ class ONNXInferenceManager:
 				return
 			
 			# Store raw array for background thread to process
-			self.input_tensor_cache = nA
+			# could do nA.copy() if worried about mutability
+			self.input_tensor_cache = nA 
 			
 		except Exception as e:
 			self.printONNX(f"Error capturing input: {e}")

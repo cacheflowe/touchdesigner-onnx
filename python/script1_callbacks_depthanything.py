@@ -33,15 +33,15 @@ class DepthAnythingInference(ONNXInferenceManager):
 		is_dpt_beit = "dpt_beit" in model_path.lower()
 		newModel = "Midas-V2" not in model_path
 		
-		if newModel == False:
-			nA = self.npu.denormalize_td_image(nA)
+		# TouchDesigner textures are already 0-1 float, denormalize to 0-255 for preprocessing
+		nA = self.npu.denormalize_td_image(nA)
 
 		# Special preprocessing
 		if is_dpt_beit:
 			if nA.shape[:2] != (384, 384):
 				nA = cv2.resize(nA, (384, 384), interpolation=cv2.INTER_CUBIC)
 		elif newModel == True:
-			# ImageNet normalization
+			# ImageNet normalization (expects 0-255 input)
 			nA = self.npu.imagenet_normalize(nA)
 
 		# Prepare input tensor
@@ -76,7 +76,7 @@ class DepthAnythingInference(ONNXInferenceManager):
 		# Final output formatting
 		output_img = output_img.astype(np.float32) / 255.0
 		output_img = self.npu.flip_v(output_img)
-		
+
 		return output_img
 
 
