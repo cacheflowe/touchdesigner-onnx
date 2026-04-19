@@ -124,6 +124,7 @@ class Skeleton:
 		self.age = 0.0
 		self.user_id = -1
 		self.lost_frames = 0
+		self.age_frames = 0
 		
 		# Pre-cache channel names (built once, reused every frame)
 		# Store as interleaved pairs: [nose:tx, nose:ty, eye_l:tx, eye_l:ty, ...]
@@ -150,6 +151,7 @@ class Skeleton:
 		self.birth = 0.0
 		self.user_id = -1
 		self.lost_frames = 0
+		self.age_frames = 0
 		self.age = 0.0
 
 	def copyData(self, skel2):
@@ -185,6 +187,7 @@ class Skeleton:
 		"""Initialize a new skeleton with unique ID and birth time."""
 		self.birth = absTime.seconds
 		self.age = 0.0
+		self.age_frames = 0
 		self.user_id = Skeleton.nextSkeletonId()
 		return self.user_id
 
@@ -268,22 +271,26 @@ class Skeleton:
 		outputOp.appendChan(self._chan_name_age)
 		outputOp.appendChan(self._chan_name_best_distance)
 
-	def updateChopValues(self, outputOp):
-		"""Update CHOP channel values (called every frame). Uses cached channel names."""
+	def updateChopValues(self, outputOp, min_age_frames=0, lost_frames_threshold=0):
+		"""Update CHOP channel values (called every frame). Uses cached channel names.
+		Skeletons younger than min_age_frames or lost beyond lost_frames_threshold
+		output zeros so they vanish from downstream visualizations."""
+		is_active = self.user_id != -1 and self.lost_frames <= lost_frames_threshold and self.age_frames >= min_age_frames
+
 		# Update keypoints (interleaved: x, y, x, y, ...)
 		for i in range(19):
-			outputOp[self._chan_names_keypoints[i * 2]][0] = self.kp_x[i]      # tx
-			outputOp[self._chan_names_keypoints[i * 2 + 1]][0] = self.kp_y[i]  # ty
+			outputOp[self._chan_names_keypoints[i * 2]][0] = self.kp_x[i] if is_active else 0.0
+			outputOp[self._chan_names_keypoints[i * 2 + 1]][0] = self.kp_y[i] if is_active else 0.0
 		
 		# Update bounding box
 		for i in range(10):
-			outputOp[self._chan_names_bbox[i]][0] = self.bbox[i]
+			outputOp[self._chan_names_bbox[i]][0] = self.bbox[i] if is_active else 0.0
 		
 		# Update metadata
-		outputOp[self._chan_name_user_id][0] = self.user_id
-		outputOp[self._chan_name_birth][0] = self.birth
-		outputOp[self._chan_name_age][0] = self.age
-		outputOp[self._chan_name_best_distance][0] = self.best_distance
+		outputOp[self._chan_name_user_id][0] = self.user_id if is_active else -1
+		outputOp[self._chan_name_birth][0] = self.birth if is_active else 0.0
+		outputOp[self._chan_name_age][0] = self.age if is_active else 0.0
+		outputOp[self._chan_name_best_distance][0] = self.best_distance if is_active else 0.0
 
 ######################################################
 ######################################################
@@ -387,10 +394,10 @@ class MovenetONNX:
 	def initSkeletonTracking(self):
 		"""Initialize skeleton tracking arrays and parameters."""
 		
-		# Skeleton arrays
-		self.skeletons = []  # Current frame skeletons (persistent)
-		self.skeletonsNew = []  # Incoming frame data (temporary)
-		self.skeletonsLost = []  # Lost skeletons awaiting potential recovery
+		# Skeleton arrays — each slot is a persistent output position
+		# Skeletons stay in their assigned slot until truly lost
+		self.skeletons = []      # Persistent output slots (fixed 6)
+		self.skeletonsNew = []   # Incoming frame data (temporary)
 		
 		# Create skeleton object pools
 		for i in range(MovenetONNX.NUM_POSES):
@@ -573,22 +580,22 @@ class MovenetONNX:
 	# Skeleton temporal tracking
 	# =================================================
 
-	# This script's intent is to create a consistent order of skeleton data, and add a "user_id" to each skeleton.
-	# By default our skeleton data has no persistence, and the order of the skeletons is different each frame, so we need to manage persistence.
-	# We will compare the (6) previous frame skeletons with the current frame's data. We only care about the keypoints total distance, by summing up the movement delta between each joint on the previous vs current frame.
-	# Rules:
-	# - If a skeleton's distance with one of the previous frame's skeletons is below a threshold, we assume that it is the same skeleton.
-	# - If a skeleton's distance between all of the previous frame's skeletons is above a threshold, we assume that it is a new skeleton, and it gets an incremented user_id
-	# - When a skeleton is found, we keep that skeleton in the same output order, so skeleton 1 persists in the same output index until it is lost, at which point that slot is opened up for a new skeleton.
-	# - If a skeleton is lost, it will be removed from the output
-	# - The head/torso keypoints are more heavily weighted in the distance calculation (vs wrists/ankles), because they can't move as fast, physically.
-	# - We always end up with 6 skeletons as the output data, and missing skeletons have all zeros for values.
-
+	# Slot-stable skeleton tracking:
+	# - Each of the 6 output slots is a persistent position in the CHOP.
+	# - A skeleton assigned to slot N stays in slot N until truly lost — 
+	#   other skeletons leaving/entering don't shift existing assignments.
+	# - Matching uses greedy best-first on keypoint distance across all
+	#   occupied slots and new detections simultaneously (prevents suboptimal
+	#   per-row greedy matches).
+	# - Lost skeletons stay in their slot with decaying confidence for
+	#   recoveryFrames, enabling re-identification after brief occlusions.
+	# - New skeletons fill the first empty slot (user_id == -1).
+	# - Empty slots output all zeros with user_id == -1.
 
 	def trackSkeletons(self):
 		"""
-		Temporal skeleton tracking algorithm.
-		Optimized to minimize allocations and use efficient lookups.
+		Slot-stable temporal skeleton tracking.
+		Skeletons maintain their CHOP slot position across their lifetime.
 		"""
 		if not self.keypointsValid():
 			return
@@ -598,99 +605,101 @@ class MovenetONNX:
 		minScale = self.ownerComp.par.Minscale.eval()
 		maxScale = self.ownerComp.par.Maxscale.eval()
 		lerpAmp = self.ownerComp.par.Lerpamp.eval()
-		
+		maxMatchDist = self.ownerComp.par.Maxmatchdist.eval()
+		recoveryFrames = self.ownerComp.par.Recoveryframes.eval()
+
 		num_people = self.keypoints.shape[1]
 
-		# Populate skeletons New from current keypoints
+		# Populate skeletonsNew from current keypoints
 		for i in range(MovenetONNX.NUM_POSES):
 			if i < num_people:
 				self.skeletonsNew[i].setFromKeypoints(self.keypoints[0, i], minConfidence, minScale, maxScale)
 			else:
 				self.skeletonsNew[i].resetData()
 
-		# Build current frame list (reuse list, clear instead of recreate)
-		skelsCurFrame = [skel for skel in self.skeletonsNew if skel.confidence > 0.01]
-		
-		# Build previous frame list
-		skelsPrevFrame = [skel for skel in self.skeletons if skel.confidence > 0.01]
-		skelsPrevFrame.extend(self.skeletonsLost)
+		# Indices of valid new detections
+		new_indices = [i for i in range(MovenetONNX.NUM_POSES) if self.skeletonsNew[i].confidence > 0.01]
 
-		# Use set for O(1) lookup of lost skeleton user_ids
-		lostUserIds = {skel.user_id for skel in self.skeletonsLost}
+		# Occupied slots: active or lost-but-still-recovering (user_id assigned)
+		occupied_slots = [i for i in range(MovenetONNX.NUM_POSES) if self.skeletons[i].user_id != -1]
 
-		# Match skeletons between frames
-		matchedSkels = []
-		unmatchedPrevSkels = []
-		maxMatchDist = self.ownerComp.par.Maxmatchdist.eval()
-		# TODO: use minAge and lostFramesThreshold params for better noisy skeleton handling
-		minAge = self.ownerComp.par.Minimumage.eval()
-		lostFramesThreshold = self.ownerComp.par.Lostframesthreshold.eval()
+		# === Greedy best-first matching ===
+		# Build all pairwise distances, sort by distance, assign greedily.
+		# This avoids suboptimal per-row greedy matches when skeletons cross paths.
+		matched_slots = set()
+		matched_new = set()
 
-		for prev_skel in skelsPrevFrame:
-			new_skel_best_match = None
-			best_distance = float('inf')
+		if occupied_slots and new_indices:
+			pairs = []
+			for slot_i in occupied_slots:
+				for new_j in new_indices:
+					dist = self.skeletons[slot_i].keypointsDistance(self.skeletonsNew[new_j])
+					if dist < maxMatchDist:
+						pairs.append((dist, slot_i, new_j))
 
-			# Find closest new skeleton match
-			for new_skel in skelsCurFrame:
-				distance = prev_skel.keypointsDistance(new_skel)
-				if distance < best_distance and distance < maxMatchDist:
-					best_distance = distance
-					new_skel_best_match = new_skel
+			# Sort by distance (best matches first)
+			pairs.sort(key=lambda p: p[0])
 
-			if new_skel_best_match is not None:
-				# Match found - preserve identity and apply smoothing
-				new_skel_best_match.copyUserId(prev_skel)
-				new_skel_best_match.lerpFrom(prev_skel, lerpAmp)
-				new_skel_best_match.setDebug(best_distance)
-				matchedSkels.append(new_skel_best_match)
-				skelsCurFrame.remove(new_skel_best_match)
+			# Greedy assignment: each slot and each detection matched at most once
+			for dist, slot_i, new_j in pairs:
+				if slot_i in matched_slots or new_j in matched_new:
+					continue
 
-				# Remove from lost if recovered (O(1) lookup)
-				if new_skel_best_match.user_id in lostUserIds:
-					self.skeletonsLost[:] = [s for s in self.skeletonsLost if s.user_id != new_skel_best_match.user_id]
-					lostUserIds.discard(new_skel_best_match.user_id)
-			else:
-				unmatchedPrevSkels.append(prev_skel)
+				# Match found — lerp new data toward previous, preserve identity
+				self.skeletonsNew[new_j].copyUserId(self.skeletons[slot_i])
+				self.skeletonsNew[new_j].lerpFrom(self.skeletons[slot_i], lerpAmp)
+				self.skeletonsNew[new_j].setDebug(dist)
 
-		# Handle new skeletons that didn't match any previous ones
-		for new_skel in skelsCurFrame:
-			new_skel.start()
-			matchedSkels.append(new_skel)
+				# Write lerped data back into the persistent slot
+				self.skeletons[slot_i].copyData(self.skeletonsNew[new_j])
+				self.skeletons[slot_i].copyUserId(self.skeletonsNew[new_j])
+				self.skeletons[slot_i].lost_frames = 0
+				self.skeletons[slot_i].age_frames += 1
 
-		# Handle unmatched previous skeletons (potentially lost)
-		for skel in unmatchedPrevSkels:
-			if skel.user_id != -1 and skel.user_id not in lostUserIds:
-				# Reuse skeleton from pool if available, otherwise create
-				lost_skel_copy = Skeleton(skel.index)
-				lost_skel_copy.copyData(skel)
-				lost_skel_copy.copyUserId(skel)
-				self.skeletonsLost.append(lost_skel_copy)
+				matched_slots.add(slot_i)
+				matched_new.add(new_j)
 
-		# Update lost skeleton frame counts and remove expired ones
-		recoveryFrames = self.ownerComp.par.Recoveryframes.eval()
-		i = 0
-		while i < len(self.skeletonsLost):
-			self.skeletonsLost[i].lost_frames += 1
-			if self.skeletonsLost[i].lost_frames > recoveryFrames:
-				self.skeletonsLost.pop(i)
-			else:
-				i += 1
+		# === Handle unmatched occupied slots (lost skeletons) ===
+		# Decay confidence and increment lost counter. Free slot when expired.
+		for slot_i in occupied_slots:
+			if slot_i in matched_slots:
+				continue
+			self.skeletons[slot_i].lost_frames += 1
+			self.skeletons[slot_i].confidence *= 0.9  # Gradual fade
+			if self.skeletons[slot_i].lost_frames > recoveryFrames:
+				# Truly lost — free this slot for a new skeleton
+				self.skeletons[slot_i].resetData()
+				self.skeletons[slot_i].resetId()
 
-		# Sort by user_id for consistent output order
-		matchedSkels.sort(key=lambda skel: skel.user_id)
+		# === Assign unmatched new detections to empty slots ===
+		# Before spawning a new skeleton, check if the detection is a duplicate
+		# of an already-matched person. MoveNet can output multiple overlapping
+		# detections for the same person — suppress these to avoid false spawns.
+		empty_slots = [i for i in range(MovenetONNX.NUM_POSES) if self.skeletons[i].user_id == -1]
+		for new_j in new_indices:
+			if new_j in matched_new:
+				continue
+			# Duplicate suppression: if this detection is close to any
+			# already-matched slot, it's a duplicate — discard it.
+			is_duplicate = False
+			for slot_i in matched_slots:
+				dist = self.skeletons[slot_i].keypointsDistance(self.skeletonsNew[new_j])
+				if dist < maxMatchDist:
+					is_duplicate = True
+					break
+			if is_duplicate:
+				continue
+			if not empty_slots:
+				break  # All 6 slots occupied
+			slot_i = empty_slots.pop(0)
+			self.skeletonsNew[new_j].start()  # Assign new unique user_id
+			self.skeletons[slot_i].copyData(self.skeletonsNew[new_j])
+			self.skeletons[slot_i].copyUserId(self.skeletonsNew[new_j])
+			self.skeletons[slot_i].lost_frames = 0
 
-		# Copy matched skeletons back to persistent array
-		num_matched = len(matchedSkels)
-		for i in range(MovenetONNX.NUM_POSES):
-			if i < num_matched:
-				self.skeletons[i].copyData(matchedSkels[i])
-				self.skeletons[i].copyUserId(matchedSkels[i])
-			else:
-				self.skeletons[i].resetData()
-				self.skeletons[i].resetId()
-		
+		# Count active skeletons (any slot with an assigned user_id)
+		self.num_active_skeletons = sum(1 for s in self.skeletons if s.user_id != -1)
 		self.time_skeleton_tracking = time.perf_counter() - start_time
-		self.num_active_skeletons = num_matched
 
 	def OutputSkeletonsToChop(self, opScriptCHOP: scriptCHOP):
 		"""Write tracked skeleton data to the Script CHOP."""
@@ -701,8 +710,10 @@ class MovenetONNX:
 		
 		# Update values each frame
 		start_time = time.perf_counter()
+		min_age = int(self.ownerComp.par.Minimumage.eval())
+		lost_threshold = int(self.ownerComp.par.Lostframesthreshold.eval())
 		for skel in self.skeletons:
-			skel.updateChopValues(opScriptCHOP)
+			skel.updateChopValues(opScriptCHOP, min_age, lost_threshold)
 		self.time_copy_to_chop = time.perf_counter() - start_time
 
 	def buildChopChannels(self, outputOp):

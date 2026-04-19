@@ -16,6 +16,7 @@ Usage:
 """
 
 import os
+import time
 import threading
 import numpy as np
 import onnxruntime as ort
@@ -30,6 +31,9 @@ class ONNXInferenceManager:
 	"""Base class for managing ONNX model loading and threaded inference in TouchDesigner."""
 	
 	def __init__(self):
+		# TouchDesigner operator reference (set in onCook)
+		self.scriptOp = None
+		
 		# Threaded model-loading state
 		self.loading_thread = None
 		self.is_loading = False
@@ -47,6 +51,13 @@ class ONNXInferenceManager:
 		# ONNX setup
 		ort.preload_dlls(directory="")
 		self.session = None  # ONNX session
+		
+		# Timing instrumentation
+		self.last_preprocess_ms = 0
+		self.last_inference_ms = 0
+		self.last_postprocess_ms = 0
+		self._frame_count = 0
+		self._timing_log_interval = 30  # Log every N frames
 		
 		# Utils
 		self.onnx_util = onnx_util
@@ -94,9 +105,12 @@ class ONNXInferenceManager:
 	def get_session_options(self):
 		"""
 		Override to customize ONNX session options.
-		Returns None by default.
+		Returns sensible defaults with full graph optimization.
 		"""
-		return None
+		opts = ort.SessionOptions()
+		opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+		opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL  # Better for GPU-bound models
+		return opts
 	
 	def on_model_loaded(self, session):
 		"""
@@ -183,23 +197,20 @@ class ONNXInferenceManager:
 	# ========== Threaded Inference ==========
 	
 	def _inference_thread(self):
-		"""Background thread for preprocessing, ONNX inference, and post-processing."""
+		"""Background thread for ONNX inference ONLY.
+		Preprocess and postprocess run on the main thread for better performance:
+		- Preprocess reads from TD's GPU staging buffer (fast on main thread, slow on bg)
+		- Postprocess can safely access TD operators without thread-safety concerns
+		- Bg thread occupies minimum time, reducing frame skipping
+		"""
 		try:
-			# Call subclass preprocessing
-			input_tensor = self.preprocess(self.input_tensor_cache)
+			t0 = time.perf_counter()
+			outputs = self.session.run(None, {self.session.get_inputs()[0].name: self.input_tensor_cache})
+			self.last_inference_ms = (time.perf_counter() - t0) * 1000
 			
-			# Run inference
-			outputs = self.session.run(None, {self.session.get_inputs()[0].name: input_tensor})
-			
-			# Call subclass postprocessing
-			output_img = self.postprocess(outputs)
-			
-			# Ensure output is float32 for TouchDesigner
-			output_img = output_img.astype(np.float32)
-			
-			# Store results thread-safely
+			# Store raw outputs thread-safely
 			with self.inference_lock:
-				self.pending_result = output_img
+				self.pending_result = outputs
 				
 		except Exception as e:
 			self.printONNX(f"Inference error: {e}")
@@ -231,8 +242,14 @@ class ONNXInferenceManager:
 		"""
 		Main inference loop called every frame by TouchDesigner.
 		Handles model loading, result retrieval, and inference dispatching.
+		
+		Threading model (inspired by MoveNet pattern):
+		- Preprocess runs on MAIN thread (fast TD buffer access, no copy needed)
+		- Only session.run() runs on background thread (minimum thread time)
+		- Postprocess runs on MAIN thread (safe TD operator access, no locks needed)
 		"""
 		# Update status parameter
+		self.scriptOp = scriptOp
 		status = self.get_loading_status()
 		scriptOp.par.Loadstatus = status
 		
@@ -248,10 +265,10 @@ class ONNXInferenceManager:
 			self.printONNX(f"Cannot process: {self.load_error}")
 			return
 		
-		# Check if we have results from background thread
+		# Check if we have raw outputs from background thread
 		with self.inference_lock:
 			if self.pending_result is not None:
-				output_img = self.pending_result
+				raw_outputs = self.pending_result
 				self.pending_result = None
 				self.frames_skipped = 0
 				
@@ -263,8 +280,30 @@ class ONNXInferenceManager:
 				except:
 					pass  # Performance constants not available
 				
-				# Output result directly (already fully processed)
+				# Postprocess on main thread (safe for TD operator access)
+				t0 = time.perf_counter()
+				output_img = self.postprocess(raw_outputs)
+				self.last_postprocess_ms = (time.perf_counter() - t0) * 1000
+				
+				# Ensure output is float32 for TouchDesigner
+				if output_img.dtype != np.float32:
+					output_img = output_img.astype(np.float32)
+				
 				scriptOp.copyNumpyArray(output_img)
+				
+				# Log timing periodically
+				self._frame_count += 1
+				if self._frame_count % self._timing_log_interval == 1:
+					total_ms = self.last_preprocess_ms + self.last_inference_ms + self.last_postprocess_ms
+					fps = 1000.0 / total_ms if total_ms > 0 else 0
+					self.printONNX(
+						f"pre={self.last_preprocess_ms:.1f}ms  "
+						f"infer={self.last_inference_ms:.1f}ms  "
+						f"post={self.last_postprocess_ms:.1f}ms  "
+						f"total={total_ms:.1f}ms  "
+						f"fps={fps:.1f}"
+					)
+				
 				return  # Early return after outputting result
 		
 		# If inference is still running, skip this frame (natural frame skipping via threading)
@@ -272,28 +311,27 @@ class ONNXInferenceManager:
 			self.frames_skipped += 1
 			return
 		
-		# Capture input on main thread (GPU texture access only)
+		# Capture input and preprocess on main thread
+		# Reading from TD's GPU staging buffer is fast on main thread (warm cache)
+		# but very slow on bg thread (cache misses, mapped memory overhead).
+		# Preprocess copies data into its own tensor buffer, so the bg thread
+		# never touches the raw TD buffer.
 		try:
 			inputTex = scriptOp.inputs[0]
 			nA = inputTex.numpyArray(delayed=True)
 			if nA is None:
 				return
 			
-			# Store raw array for background thread to process
-			# could do nA.copy() if worried about mutability
-			self.input_tensor_cache = nA 
+			t0 = time.perf_counter()
+			self.input_tensor_cache = self.preprocess(nA)
+			self.last_preprocess_ms = (time.perf_counter() - t0) * 1000
 			
 		except Exception as e:
 			self.printONNX(f"Error capturing input: {e}")
 			return
 		
-		# Start inference in background thread
+		# Start inference in background thread (runs ONLY session.run)
 		self.is_inferencing = True
 		self.inference_thread = threading.Thread(target=self._inference_thread)
 		self.inference_thread.daemon = True
 		self.inference_thread.start()
-		
-		# Debug: Check thread count
-		active_threads = threading.active_count()
-		if active_threads > 10:
-			self.printONNX(f"Warning: {active_threads} active threads!")

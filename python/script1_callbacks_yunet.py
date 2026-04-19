@@ -2,9 +2,9 @@
 import sys
 
 # import other dependencies now that the path supports it
+import time
 import threading
 import numpy as np
-import onnxruntime as ort
 import cv2
 
 # custom util imports
@@ -33,6 +33,14 @@ NUM_KEYPOINTS = 5  # Number of facial keypoints for YuNet (right eye, left eye, 
 detection_boxes = []  # List of bounding boxes [x1, y1, x2, y2, score]
 detection_keypoints = []  # List of keypoint arrays
 num_faces_detected = 0  # Number of faces detected in last inference
+_prev_num_faces = -1  # Track previous face count to avoid unnecessary CHOP rebuilds
+
+# Timing instrumentation
+last_preprocess_ms = 0
+last_inference_ms = 0
+last_postprocess_ms = 0
+_frame_count = 0
+_timing_log_interval = 30
 
 # YuNet setup -------------------------------
 
@@ -131,7 +139,12 @@ def onPulse(par):
 
 def buildChopChannels(scriptOp, num_faces):
 	"""Build CHOP channels for face detection output dynamically based on number of faces."""
-	# rebuild every frame to handle variable number of faces	
+	global _prev_num_faces
+	# Skip rebuild if face count hasn't changed
+	if num_faces == _prev_num_faces:
+		return
+	_prev_num_faces = num_faces
+
 	scriptOp.clear()
 	
 	for i in range(num_faces):
@@ -205,81 +218,22 @@ def updateChopChannels(scriptOp):
 
 
 def _inference_thread():
-	"""Background thread for preprocessing, YuNet inference, and post-processing."""
-	global pending_result, is_inferencing, frames_skipped_final, detection_boxes, detection_keypoints, num_faces_detected, cached_input_size
+	"""Background thread for YuNet inference ONLY.
+	Preprocess and postprocess run on the main thread for better performance.
+	"""
+	global pending_result, is_inferencing, frames_skipped_final
+	global last_inference_ms
 	
 	try:
-		# Preprocessing - prepare image for face detection
-		nA = input_tensor_cache  # This is the raw numpy array from texture
-		input_h, input_w = nA.shape[:2]
+		# === INFERENCE ONLY ===
+		t0 = time.perf_counter()
+		faces = model.detect(input_tensor_cache)
+		last_inference_ms = (time.perf_counter() - t0) * 1000
 		
-		# Resize for faster inference (coordinates will be scaled back)
-		inference_w = int(input_w)
-		inference_h = int(input_h)
-		
-		# Convert from TD format (0-1, RGBA, flipped) to CV format (0-255, BGR)
-		# Optimize: combine operations to reduce memory copies
-		nA = npu.flip_v(nA)
-		nA = (nA[:, :, :3] * 255).astype(np.uint8)  # Convert RGBA to RGB and denormalize in one step
-				
-		# Convert RGB to BGR for OpenCV (just reverse the color channels)
-		img_bgr = nA[:, :, ::-1]  # Faster than cv2.cvtColor
-		
-		# Only call setInputSize if dimensions changed (expensive operation)
-		current_size = (inference_w, inference_h)
-		if cached_input_size != current_size:
-			model.setInputSize(current_size)
-			cached_input_size = current_size
-			printONNX(f"Set YuNet input size to: {current_size}")
-		
-		# Run YuNet detection
-		faces = model.detect(img_bgr)
-		
-		# Parse YuNet output format
-		filtered_boxes = []
-		filtered_keypoints = []
-		
-		if faces[1] is not None:
-			for face in faces[1]:  # Process all detected faces
-				# Extract bbox (x, y, w, h format) and convert to (x1, y1, x2, y2)
-				x, y, w, h = face[:4]
-				confidence = face[14]
-				
-				if confidence < 0.3:
-					continue  # Skip low-confidence detections
-				
-				# Convert to normalized coordinates (0-1) in x1,y1,x2,y2 format
-				# Note: coordinates are in scaled inference space, normalize directly
-				# Flip Y coordinates because we flipped the image vertically for OpenCV
-				y1_norm = 1.0 - (y / inference_h)  # Flip Y coordinate
-				y2_norm = 1.0 - ((y + h) / inference_h)  # Flip Y coordinate
-				
-				scaled_box = [
-					x / inference_w,
-					y2_norm,  # Use flipped Y (smaller value, bottom of bbox)
-					(x + w) / inference_w,
-					y1_norm,  # Use flipped Y (larger value, top of bbox)
-					confidence
-				]
-				filtered_boxes.append(scaled_box)
-				
-				# Extract 5 keypoints (right eye, left eye, nose, right mouth, left mouth)
-				keypoints_raw = face[4:14].reshape(5, 2)  # Reshape to 5 points x 2 coords
-				scaled_kps = []
-				for kp in keypoints_raw:
-					scaled_kps.append([
-						kp[0] / inference_w,
-						1.0 - (kp[1] / inference_h)  # Flip Y coordinate
-					])
-				filtered_keypoints.append(scaled_kps)
-		
-		# Store results thread-safely
+		# Store raw results thread-safely
 		with inference_lock:
-			detection_boxes = filtered_boxes
-			detection_keypoints = filtered_keypoints
-			num_faces_detected = len(filtered_boxes)
-			pending_result = True  # Signal that we have new results
-		
+			pending_result = faces
+	
 	except Exception as e:
 		printONNX(f"Inference error: {e}")
 		import traceback
@@ -289,8 +243,67 @@ def _inference_thread():
 		frames_skipped_final = frames_skipped
 
 
+def _postprocess_faces(faces):
+	"""Postprocess raw YuNet detection output into normalized boxes and keypoints.
+	Runs on main thread — no locks needed.
+	"""
+	global detection_boxes, detection_keypoints, num_faces_detected, last_postprocess_ms
+	
+	t0 = time.perf_counter()
+	filtered_boxes = []
+	filtered_keypoints = []
+	
+	if faces[1] is not None:
+		all_faces = faces[1]
+		# Vectorized confidence filter
+		confidences = all_faces[:, 14]
+		valid_mask = confidences >= 0.3
+		valid_faces = all_faces[valid_mask]
+		
+		if len(valid_faces) > 0:
+			# Get inference dimensions from cached input
+			inference_h, inference_w = input_tensor_cache.shape[:2]
+			
+			# Vectorized coordinate conversion
+			x = valid_faces[:, 0]
+			y = valid_faces[:, 1]
+			w = valid_faces[:, 2]
+			h = valid_faces[:, 3]
+			scores = valid_faces[:, 14]
+			
+			inv_w = 1.0 / inference_w
+			inv_h = 1.0 / inference_h
+			
+			x1_norm = x * inv_w
+			y1_flip = 1.0 - (y * inv_h)
+			x2_norm = (x + w) * inv_w
+			y2_flip = 1.0 - ((y + h) * inv_h)
+			
+			for i in range(len(valid_faces)):
+				filtered_boxes.append([
+					float(x1_norm[i]),
+					float(y2_flip[i]),
+					float(x2_norm[i]),
+					float(y1_flip[i]),
+					float(scores[i])
+				])
+				
+				# Vectorized keypoint normalization
+				kps_raw = valid_faces[i, 4:14].reshape(5, 2)
+				kps_norm = np.empty_like(kps_raw)
+				kps_norm[:, 0] = kps_raw[:, 0] * inv_w
+				kps_norm[:, 1] = 1.0 - (kps_raw[:, 1] * inv_h)
+				filtered_keypoints.append(kps_norm.tolist())
+	
+	detection_boxes = filtered_boxes
+	detection_keypoints = filtered_keypoints
+	num_faces_detected = len(filtered_boxes)
+	last_postprocess_ms = (time.perf_counter() - t0) * 1000
+
+
 def onCook(scriptOp):
-	global session, is_loading, load_error, is_inferencing, pending_result, input_tensor_cache, frames_skipped, frames_skipped_final, num_faces_detected
+	global session, is_loading, load_error, is_inferencing, pending_result, input_tensor_cache, frames_skipped, frames_skipped_final, num_faces_detected, cached_input_size
+	global last_preprocess_ms, _frame_count
 
 	# Update status parameter
 	status = get_loading_status()
@@ -308,38 +321,69 @@ def onCook(scriptOp):
 		printONNX(f"Cannot process: {load_error}")
 		return
 
-	# Check if we have results from background thread
+	# Check if we have raw results from background thread
 	with inference_lock:
 		if pending_result is not None:
+			raw_faces = pending_result
 			pending_result = None
 			frames_skipped = 0
-			# printONNX("Inference thread completed.", frames_skipped_final, "frames were skipped.")
+			
 			op('constant_performance').par.const0value = frames_skipped_final
 			op('constant_performance').par.const1value = num_faces_detected
 
+			# Postprocess on main thread (safe for TD operator access, no locks needed)
+			_postprocess_faces(raw_faces)
+
 			# Update CHOP channels with detection results
 			updateChopChannels(scriptOp)
+			
+			# Log timing periodically
+			_frame_count += 1
+			if _frame_count % _timing_log_interval == 1:
+				total = last_preprocess_ms + last_inference_ms + last_postprocess_ms
+				fps = 1000.0 / total if total > 0 else 0
+				printONNX(
+					f"pre={last_preprocess_ms:.1f}ms  "
+					f"infer={last_inference_ms:.1f}ms  "
+					f"post={last_postprocess_ms:.1f}ms  "
+					f"total={total:.1f}ms  "
+					f"fps={fps:.1f}  "
+					f"faces={num_faces_detected}"
+				)
 
 	# If inference is still running, skip this frame
 	if is_inferencing:
 		frames_skipped += 1
 		return
 	
-	# Capture input on main thread (GPU texture access only)
+	# Preprocess on main thread (GPU texture access is fast here, no copy needed)
 	try:
 		inputTex = op('null_input')
 		nA = inputTex.numpyArray(delayed=True)
 		if nA is None:
 			return
 		
-		# Store raw array for background thread to process
-		input_tensor_cache = nA
+		# Preprocess: fuse flip + RGBA->BGR + denormalize
+		# Read directly from TD's staging buffer (cache-warm on main thread)
+		t0 = time.perf_counter()
+		input_h, input_w = nA.shape[:2]
+		img_bgr = (nA[::-1, :, 2::-1] * 255).astype(np.uint8)
+		
+		# Only call setInputSize if dimensions changed (expensive operation)
+		current_size = (int(input_w), int(input_h))
+		if cached_input_size != current_size:
+			model.setInputSize(current_size)
+			cached_input_size = current_size
+			printONNX(f"Set YuNet input size to: {current_size}")
+		
+		input_tensor_cache = img_bgr
+		last_preprocess_ms = (time.perf_counter() - t0) * 1000
 
 	except Exception as e:
 		printONNX(f"Error capturing input: {e}")
 		return
 	
-	# Start inference in background thread
+	# Start inference in background thread (runs ONLY model.detect)
 	is_inferencing = True
 	inference_thread = threading.Thread(target=_inference_thread)
 	inference_thread.daemon = True
