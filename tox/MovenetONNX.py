@@ -1,12 +1,9 @@
 ﻿import os
-import sys
 import time
 
 import threading
 import numpy as np
 import onnxruntime as ort
-from TDStoreTools import StorageManager
-import TDFunctions as TDF
 
 # custom util imports
 onnx_util = mod(f'{op.PyUtils}/onnx_util')
@@ -31,10 +28,8 @@ class Skeleton:
 	
 	TODO:
 	- How to ensure python libs with pyEnvManager are ready before component runs?
-	- [WIP, needs fixing] Catch errors and display in new COMP status field and maybe set the COMP color to red
-	- Don't register skeleton until age is > N frames to avoid false positives
+	- Catch errors and display in new COMP status field and maybe set the COMP color to red
 	- Nice-to-haves:
-		- Improve lost skeleton tracking and re-matching. Anything else we can do here?
 		- Model path config in COMP parameters?
 		- If only looking at torso, can we discard squished body parts?
 	"""
@@ -161,7 +156,6 @@ class Skeleton:
 		np.copyto(self.bbox, skel2.bbox)
 		self.confidence = skel2.confidence
 		self.best_distance = skel2.best_distance
-		self.confidence = skel2.confidence
 		self.birth = skel2.birth
 		self.age = absTime.seconds - self.birth
 
@@ -498,55 +492,6 @@ class MovenetONNX:
 	# CHOP output helpers
 	# =================================================
 
-	def chanName(self, index, name):
-		return f"p{index+1}/{name}"
-
-	def chanNamePos(self, index, name, axis):
-		return f"p{index+1}/{name}:{axis}"
-
-	def RebuildOutputChannels(self, outputOp):
-		# Pass in the script CHOP so we don't get circular dependencies
-		if outputOp['p1/nose:tx'] is None:  # make sure we have a channel that we expect
-			# print('Creating channels for skeleton detections')
-			for i in range(MovenetONNX.NUM_POSES):
-				for name in Skeleton.KEYPOINT_NAMES:
-					# create channel names
-					self.addChannel(outputOp, self.chanNamePos(i, name, 'tx'))
-					self.addChannel(outputOp, self.chanNamePos(i, name, 'ty'))
-					self.addChannel(outputOp, self.chanNamePos(i, name, 'tz'))
-				# create bounding box channels
-				for prop in Skeleton.BBOX_PROPS:
-					self.addChannel(outputOp, self.chanName(i, prop))
-
-	def addChannel(self, outputOp, chan_name):
-		if outputOp[chan_name] is None:
-			outputOp.appendChan(chan_name)
-			print(f"Created channel: {chan_name}")
-		else:
-			# print(f"Channel already exists: {chan_name}")
-			pass
-
-	def setValue(self, outputOp, index, name, value):
-		# print('Setting value:', name, value)
-		chan_name = self.chanName(index, name)
-		outputOp[chan_name][0] = value
-		return
-
-	def setValuePos(self, outputOp, index, name, x, y, z):
-		# set the x, y, z values for a keypoint
-		self.setValue(outputOp, index, f"{name}:tx", x)
-		self.setValue(outputOp, index, f"{name}:ty", y)
-		self.setValue(outputOp, index, f"{name}:tz", z)
-		return
-
-	def resetDetectionResult(self, outputOp, index):
-		# reset detection values to 0
-		for name in Skeleton.KEYPOINT_NAMES:
-			self.setValue(outputOp, index, name, 0.0)
-		return
-	
-
-
 	# =================================================
 	# Main update loop
 	# =================================================
@@ -833,33 +778,6 @@ class MovenetONNX:
 			self.queuedError = f"Inference error: {e}"
 		finally:
 			self.is_inferencing = False
-
-	def runInference(self):
-		"""Run MoveNet inference synchronously (blocking). Use runInferenceThreaded() for non-blocking."""
-		if self.session is None:
-			return
-
-		# get numpy array from input TOP
-		nA = self.opInputTOP.numpyArray(delayed=True)
-
-		# pre-process the numpy array, ensuring it is in the correct format for mediapipe
-		nA = npu.flip_v(nA)
-		nA = npu.rgba_to_rgb(nA)
-		nA = npu.grayscale_to_rgb(nA)
-		nA = npu.denormalize_td_image(nA)
-		input_tensor = npu.add_batch_dimension(nA)
-		input_tensor = npu.convert_to_int32(input_tensor)  # Convert to int32 for Movenet
-
-		# Run inference
-		input_name = self.session.get_inputs()[0].name
-		output_name = self.session.get_outputs()[0].name
-		self.keypoints = self.session.run([output_name], {input_name: input_tensor})[0]
-
-		# log input shape once
-		if self.loggedInputShape == False:  # log input shape once
-			self.printONNX("Input TOP shape:", nA.shape)
-			self.loggedInputShape = True
-
 
 	def keypointsValid(self):
 		"""Check if keypoints array has valid MoveNet format."""
