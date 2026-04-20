@@ -89,7 +89,7 @@ class TrackedObject:
 		self.box = box          # [x1, y1, x2, y2] normalized 0-1
 		self.class_id = class_id
 		self.score = score
-		self.age = 0            # frames since last matched
+		self.lost_frames = 0    # frames since last matched
 		self.total_frames = 1   # total frames this track has existed
 		self.velocity = np.array([0.0, 0.0, 0.0, 0.0])  # box delta per frame
 
@@ -102,12 +102,12 @@ class TrackedObject:
 		self.box = box
 		self.class_id = class_id
 		self.score = score
-		self.age = 0
+		self.lost_frames = 0
 		self.total_frames += 1
 
 	def predict(self):
 		"""Predict next position using velocity (for unmatched frames)."""
-		self.age += 1
+		self.lost_frames += 1
 		self.total_frames += 1
 		self.box = (np.array(self.box) + self.velocity).tolist()
 		self.score *= 0.95  # Decay confidence when unmatched
@@ -157,7 +157,7 @@ class SimpleTracker:
 			# No detections: age all tracks
 			for t in self.tracks:
 				t.predict()
-			self.tracks = [t for t in self.tracks if t.age <= self.max_age]
+			self.tracks = [t for t in self.tracks if t.lost_frames <= self.max_age]
 			return self.tracks
 
 		# Build IoU matrix between existing tracks and new detections
@@ -211,7 +211,7 @@ class SimpleTracker:
 			self.tracks.append(TrackedObject(det['box'], det['class_id'], det['score']))
 
 		# Prune dead tracks
-		self.tracks = [t for t in self.tracks if t.age <= self.max_age]
+		self.tracks = [t for t in self.tracks if t.lost_frames <= self.max_age]
 
 		return self.tracks
 
@@ -234,7 +234,7 @@ class YOLO26ObjectDetectionInference(ONNXInferenceManager):
 		self.conf_threshold = CONF_THRESHOLD  # Will be overridden by custom par
 		self.tracker = SimpleTracker()
 		# Structured tracking data exposed for CHOP consumption
-		# Each entry: {track_id, class_id, class_name, score, x1, y1, x2, y2, vx, vy, age, total_frames}
+		# Each entry: {track_id, class_id, class_name, score, cx, cy, w, h, x_left, x_right, y_top, y_bottom, x1, y1, x2, y2, vx, vy, lost_frames, total_frames}
 		self.tracked_objects = []
 		self.pending_table_update = False  # Flag for main-thread table flush
 		# Pre-allocated buffers (lazily sized)
@@ -464,9 +464,12 @@ class YOLO26ObjectDetectionInference(ONNXInferenceManager):
 				'class_name': COCO_CLASSES.get(t.class_id, 'unknown'),
 				'score': t.score,
 				'cx': cx, 'cy': cy, 'w': w, 'h': h,
-				'x1': t.box[0], 'y1': t.box[1], 'x2': t.box[2], 'y2': t.box[3],
+				'x_left': t.box[0],
+				'x_right': t.box[2],
+				'y_top': t.box[3],     # top edge of bbox (TD coords)
+				'y_bottom': t.box[1],  # bottom edge of bbox (TD coords)
 				'vx': float(t.velocity[0]), 'vy': float(t.velocity[1]),
-				'age': t.age,
+				'lost_frames': t.lost_frames,
 				'total_frames': t.total_frames,
 			})
 
@@ -498,20 +501,20 @@ class YOLO26ObjectDetectionInference(ONNXInferenceManager):
 		draw_img = np.zeros((self.original_h, self.original_w, 3), dtype=np.uint8)
 
 		for obj in self.tracked_objects:
-			if obj['age'] > 0 and obj['score'] < self.conf_threshold * 0.5:
+			if obj['lost_frames'] > 0 and obj['score'] < self.conf_threshold * 0.5:
 				continue  # Skip faded-out unmatched tracks
 
-			px1 = int(obj['x1'] * self.original_w)
-			py1 = int(obj['y1'] * self.original_h)
-			px2 = int(obj['x2'] * self.original_w)
-			py2 = int(obj['y2'] * self.original_h)
+			px1 = int(obj['x_left'] * self.original_w)
+			py1 = int(obj['y_bottom'] * self.original_h)
+			px2 = int(obj['x_right'] * self.original_w)
+			py2 = int(obj['y_top'] * self.original_h)
 
 			class_name = obj['class_name']
 			color = CLASS_COLORS_BGR.get(class_name, DEFAULT_COLOR_BGR)
 
 			# Dim color if track is unmatched (age > 0)
-			if obj['age'] > 0:
-				fade = max(0.3, 1.0 - obj['age'] / TRACKER_MAX_AGE)
+			if obj['lost_frames'] > 0:
+				fade = max(0.3, 1.0 - obj['lost_frames'] / TRACKER_MAX_AGE)
 				color = tuple(int(c * fade) for c in color)
 
 			thickness = 2
@@ -534,7 +537,7 @@ class YOLO26ObjectDetectionInference(ONNXInferenceManager):
 	#   tracks = mgr.tracked_objects  # list of dicts
 	#
 	# Each dict contains: track_id, class_id, class_name, score,
-	#   cx, cy, w, h, x1, y1, x2, y2, vx, vy, age, total_frames
+	#   cx, cy, w, h, x_left, x_right, y_top, y_bottom, vx, vy, lost_frames, total_frames
 	#
 	# For a Table DAT approach, call write_tracks_to_table() from a
 	# Script DAT or Execute DAT each frame.
@@ -547,18 +550,19 @@ class YOLO26ObjectDetectionInference(ONNXInferenceManager):
 			return
 		tbl.clear()
 		tbl.appendRow(['track_id', 'class_id', 'class_name', 'score',
-					'cx', 'cy', 'w', 'h', 'x1', 'y1', 'x2', 'y2',
-					'vx', 'vy', 'age', 'total_frames'])
+					'cx', 'cy', 'w', 'h',
+					'x_left', 'x_right', 'y_top', 'y_bottom',
+					'vx', 'vy', 'lost_frames', 'total_frames'])
 		for obj in self.tracked_objects:
 			tbl.appendRow([
 				obj['track_id'], obj['class_id'], obj['class_name'],
 				f"{obj['score']:.3f}",
 				f"{obj['cx']:.4f}", f"{obj['cy']:.4f}",
 				f"{obj['w']:.4f}", f"{obj['h']:.4f}",
-				f"{obj['x1']:.4f}", f"{obj['y1']:.4f}",
-				f"{obj['x2']:.4f}", f"{obj['y2']:.4f}",
+				f"{obj['x_left']:.4f}", f"{obj['x_right']:.4f}",
+				f"{obj['y_top']:.4f}", f"{obj['y_bottom']:.4f}",
 				f"{obj['vx']:.4f}", f"{obj['vy']:.4f}",
-				obj['age'], obj['total_frames'],
+				obj['lost_frames'], obj['total_frames'],
 			])
 
 
